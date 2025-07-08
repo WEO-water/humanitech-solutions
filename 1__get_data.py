@@ -5,12 +5,11 @@ import sys
 from functools import reduce
 import contextily as ctx
 import numpy as np
-
+import h3pandas
 
 
 from prompt_func import generate_risk_actions, map_data
-
-
+from upload_gcs import upload_to_gcs_with_timestamp
 
 
 FELT_DATA_DIR = 'gs://dl-test-439308-bucket/weo-data/dashboard'#'/mnt/fvw/data/tmp/humanitech/dashboard'
@@ -22,7 +21,7 @@ DB_PTH_DCT = {
     'densely_populated_at_risk_people': 'densely_populated_at_risk_people.geojson',
     'emergency_assemble_areas': 'emergency_assemble_areas.geojson',
     'places_of_interest': 'places_of_interest.geojson',
-    'comments': 'comments.zip',
+    'comments': 'comments_20250708_123244.zip',
 
 }
 
@@ -134,8 +133,8 @@ if not all_in_selected:
 
 
 
-df.to_csv("df_export.csv", index=False)
-
+selected_rows.to_csv("df_export.csv", index=False)
+upload_to_gcs_with_timestamp(bucket_name="dl-test-439308-bucket", local_file_path="df_export.csv", gcs_prefix="weo-data/dashboard/")
 
 
 
