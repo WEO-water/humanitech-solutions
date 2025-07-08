@@ -13,7 +13,7 @@ from shapely import wkt
 import time
 
 
-from prompt_func import filter_comments
+from prompt_filter_comments import filter_comments
 from upload_gcs import upload_to_gcs_with_timestamp
 from tqdm import tqdm
 import logging
@@ -41,7 +41,7 @@ def main():
 
             output = filter_comments(
                 comment=row['text'],
-                print_output=False
+                print_output=True
             )
 
             if isinstance(output, str):
@@ -65,13 +65,13 @@ def main():
                 continue
             
     # Save the filtered DataFrame to a GeoJSON file
-    filtered_df.to_file(OUT_VECTOR, driver="GeoJSON")
-    print(f"GeoJSON file {OUT_VECTOR} created.")
+    #filtered_df.to_file(OUT_VECTOR, driver="GeoJSON")
+    #print(f"GeoJSON file {OUT_VECTOR} created.")
 
 
 if __name__ == "__main__":
 
-    COMMENTS_TS = '20250708_123244'
+    COMMENTS_TS = '20250708_164650'
 
     #Inputs
     COMMENTS_PTH = f"gs://dl-test-439308-bucket/weo-data/dashboard/comments_{COMMENTS_TS}.zip"
@@ -83,7 +83,7 @@ if __name__ == "__main__":
     main()
 
     # zip the geojsonfile
-    os.system(f"zip comments.zip {OUT_VECTOR}")
+    #os.system(f"zip comments.zip {OUT_VECTOR}")
 
     # upload this into GCS bucket:
-    upload_to_gcs_with_timestamp(bucket_name="dl-test-439308-bucket", local_file_path="comments.zip", gcs_prefix="weo-data/dashboard/")
+    #upload_to_gcs_with_timestamp(bucket_name="dl-test-439308-bucket", local_file_path="comments.zip", gcs_prefix="weo-data/dashboard/")

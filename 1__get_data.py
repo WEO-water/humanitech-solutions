@@ -12,7 +12,7 @@ from upload_gcs import upload_to_gcs_with_timestamp
 
 
 FELT_DATA_DIR = 'gs://dl-test-439308-bucket/weo-data/dashboard'#'/mnt/fvw/data/tmp/humanitech/dashboard'
-COMMENTS_TS = '20250708_123244'
+COMMENTS_TS = '20250708_164650'
 DB_PTH_DCT = {
     
     'metrics': 'Heat-Risk-.zip',

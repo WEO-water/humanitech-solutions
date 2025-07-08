@@ -37,7 +37,6 @@ elif client._api_client.api_key:
 
 def filter_comments(comment, print_output=False):
 
-
     SYSTEM_INSTRUCTION = f"""
     You are an expert assistant designed to evaluate the usefulness of comments for generating highly specific and actionable climate and disaster mitigation recommendations for urban settings.
 
@@ -83,7 +82,7 @@ def filter_comments(comment, print_output=False):
             top_k=20,
             candidate_count=1,
             seed=5, #ALWAYS SAME ANSWERS!
-            # max_output_tokens=100,
+            max_output_tokens=50, # could be useful to limit the output length (as its not needed)
             presence_penalty=0.0,
             frequency_penalty=0.0,
         ),
