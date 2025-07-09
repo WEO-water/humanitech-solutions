@@ -11,6 +11,8 @@ import sys
 from pydantic import BaseModel
 from typing import List
 
+import asyncio
+from tenacity import retry, wait_random_exponential, stop_after_attempt
 # if "google.colab" in sys.modules:
 #     from google.colab import auth
 
@@ -21,23 +23,12 @@ PROJECT_ID = "dl-test-439308"  #
 
 MODEL_ID = "gemini-2.5-flash"
 LOCATION = os.environ.get("GOOGLE_CLOUD_REGION", "global")
-client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION, http_options=HttpOptions(api_version="v1"))
 
-if not client.vertexai:
-    print("Using Gemini Developer API.")
-elif client._api_client.project:
-    print(
-        f"Using Vertex AI with project: {client._api_client.project} in location: {client._api_client.location}"
-    )
-elif client._api_client.api_key:
-    print(
-        f"Using Vertex AI in express mode with API key: {client._api_client.api_key[:5]}...{client._api_client.api_key[-5:]}"
-    )
+# Concurrency settings for API calls
+MAX_CONCURRENT_REQUESTS = 5
+semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-
-def filter_comments(comment, print_output=False):
-
-    SYSTEM_INSTRUCTION = f"""
+SYSTEM_INSTRUCTION = f"""
     You are an expert assistant designed to evaluate the usefulness of comments for generating highly specific and actionable climate and disaster mitigation recommendations for urban settings.
 
     Your task is to determine if a given comment provides valuable, contextual information that can lead to more precise and location-specific mitigation actions.
@@ -60,38 +51,53 @@ def filter_comments(comment, print_output=False):
 
     """ 
 
+@retry(wait=wait_random_exponential(multiplier=1, max=60), stop=stop_after_attempt(10))
+async def filter_comments(row_id, comment, print_output=False):
 
-    PROMPT_TEMPLATE = f"""
-    Please evaluate the usefulness of the following comment for generating actionable climate and disaster mitigation recommendations in an 
-    urban setting. Respond in JSON format with a 'useful' key (1 for useful, 0 for not useful) and an 'explanation' key.
+    async with semaphore:
+        client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION, http_options=HttpOptions(api_version="v1"))
 
-    Comment: '{comment}'
-    """
+        PROMPT_TEMPLATE = f"""
+            Please evaluate the usefulness of the following comment for generating actionable climate and disaster mitigation recommendations in an 
+            urban setting. Respond in JSON format with a 'useful' key (1 for useful, 0 for not useful) and an 'explanation' key.
 
+            Comment: '{comment}'
+        """
 
-    #Generate the structured response
-    response = client.models.generate_content(
-        model=MODEL_ID,
-        contents=[PROMPT_TEMPLATE],
-        config=GenerateContentConfig(
-            response_mime_type="application/json",
-            #response_schema=RiskActions if not explain else RiskActions_and_explanation,
-            system_instruction=SYSTEM_INSTRUCTION,
-            temperature=0.4,
-            top_p=0.95,
-            top_k=20,
-            candidate_count=1,
-            seed=5, #ALWAYS SAME ANSWERS!
-            #max_output_tokens=50, # could be useful to limit the output length (as its not needed)
-            presence_penalty=0.0,
-            frequency_penalty=0.0,
-        ),
-    )
+        try:
+            # Generate the structured response
+            response = await client.aio.models.generate_content(
+                model=MODEL_ID,
+                contents=[PROMPT_TEMPLATE],
+                config=GenerateContentConfig(
+                    response_mime_type="application/json",
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    temperature=0.4,
+                    top_p=0.95,
+                    top_k=20,
+                    candidate_count=1,
+                    seed=5,  # ALWAYS SAME ANSWERS!
+                    presence_penalty=0.0,
+                    frequency_penalty=0.0,
+                ),
+            )
 
-    if print_output:
-        print("System Instruction:", SYSTEM_INSTRUCTION)
-        print("Prompt Template:", PROMPT_TEMPLATE)
-        print("Response:", response.text)
+            if response.text:
+                if print_output:
+                    print("System Instruction:", SYSTEM_INSTRUCTION)
+                    print("Prompt Template:", PROMPT_TEMPLATE)
+                    print("Response:", response.text)
+                
+                return row_id, response.text
+            else:
+                # Handle cases where response.text might be empty or problematic
+                print(f"Warning: Empty response for row_id {row_id}, comment: '{comment}'. Full response: {response}")
+                return row_id, "No useful information found."
 
+        
+        except Exception as e:
+            print(f"Error generating content for row_id {row_id}, prompt: '{prompt}': {e}")
+            return row_id, f"Error: {e}"
+      
 
-    return response.text
+        

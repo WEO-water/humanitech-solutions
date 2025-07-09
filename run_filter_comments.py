@@ -12,6 +12,8 @@ import json
 from shapely import wkt
 import time
 
+import asyncio
+from tenacity import retry, wait_random_exponential, stop_after_attempt
 
 from prompt_filter_comments import filter_comments
 from upload_gcs import upload_to_gcs_with_timestamp
@@ -27,7 +29,7 @@ logging.basicConfig(
     ]
 )
 
-def main():
+async def main():
 
     # Read comments data
     filtered_df = gpd.read_file(COMMENTS_PTH, 
@@ -35,34 +37,28 @@ def main():
 
     print(f"Number of rows in filtered DataFrame: {len(filtered_df)}")
 
+    tasks = []
     for idx, row in filtered_df.iterrows():
-        try:
-            logging.debug(f"Processing row {idx}")
+        logging.debug(f"Processing row {idx}")
+        tasks.append(filter_comments(idx, row['text'], print_output=True))
 
-            output = filter_comments(
-                comment=row['text'],
-                print_output=True
-            )
+    print(f"Starting {len(tasks)} asynchronous LLM generation tasks...")
 
-            if isinstance(output, str):
-                output_dict = json.loads(output)
-            else:
-                output_dict = output
+    results = await asyncio.gather(*tasks)
+    print("All LLM tasks completed.")
+
+    for idx, response_text in results:
             
-            if output_dict.get('useful', 0) == 0:
-                logging.debug(f"Row {idx} is not useful, delete it and continue.")
-                filtered_df = filtered_df[filtered_df.index != idx]
-                continue
-
+        if isinstance(response_text, str):
+            output_dict = json.loads(response_text)
+        else:
+            output_dict = response_text
             
-        except Exception as e:
-            if "RESOURCE_EXHAUSTED" in str(e):
-                print(f"RESOURCE_EXHAUSTED error at row {idx}, sleeping 60s and retrying...", file=sys.stderr)
-                time.sleep(60)
-                continue  # This will re-enter the for loop with the same row (since nothing was added to processed_h3_indices)
-            else:
-                print(f"Error processing row {idx}: {e}", file=sys.stderr)
-                continue
+        if output_dict.get('useful', 0) == 0:
+            logging.debug(f"Row {idx} is not useful, delete it and continue.")
+            filtered_df = filtered_df[filtered_df.index != idx]
+            continue
+
             
     # Save the filtered DataFrame to a GeoJSON file
     #filtered_df.to_file(OUT_VECTOR, driver="GeoJSON")
@@ -80,7 +76,13 @@ if __name__ == "__main__":
     CHECKPOINT_FILE = f"comments_filtering_checkpoint_{COMMENTS_TS}.geojson"
     OUT_VECTOR = f"comments_filtered_{COMMENTS_TS}.geojson"
 
-    main()
+    try:
+        asyncio.run(main())
+        logging.info("All comments processed successfully.")
+
+    except Exception as e:
+        logging.error(f"Error occurred in main: {e}")
+
 
     # zip the geojsonfile
     #os.system(f"zip comments.zip {OUT_VECTOR}")
