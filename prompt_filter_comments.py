@@ -82,7 +82,7 @@ def filter_comments(comment, print_output=False):
             top_k=20,
             candidate_count=1,
             seed=5, #ALWAYS SAME ANSWERS!
-            max_output_tokens=50, # could be useful to limit the output length (as its not needed)
+            #max_output_tokens=50, # could be useful to limit the output length (as its not needed)
             presence_penalty=0.0,
             frequency_penalty=0.0,
         ),
