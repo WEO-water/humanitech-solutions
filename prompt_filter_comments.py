@@ -25,7 +25,7 @@ MODEL_ID = "gemini-2.5-flash"
 LOCATION = os.environ.get("GOOGLE_CLOUD_REGION", "global")
 
 # Concurrency settings for API calls
-MAX_CONCURRENT_REQUESTS = 5
+MAX_CONCURRENT_REQUESTS = 5 # That could be increased 
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 SYSTEM_INSTRUCTION = f"""

@@ -30,39 +30,46 @@ logging.basicConfig(
 )
 
 async def main():
-
+    """
+    Main async function to filter comments using LLM and save useful ones.
+    """
     # Read comments data
-    filtered_df = gpd.read_file(COMMENTS_PTH, 
-                                dtype={'text': 'str'})
-
-    print(f"Number of rows in filtered DataFrame: {len(filtered_df)}")
+    filtered_df = gpd.read_file(COMMENTS_PTH, dtype={'text': 'str'})
+    logging.info(f"Number of rows in filtered DataFrame: {len(filtered_df)}")
 
     tasks = []
-    for idx, row in filtered_df.iterrows():
+    for idx, row in tqdm(filtered_df.iterrows(), total=len(filtered_df), desc="Scheduling tasks"):
         logging.debug(f"Processing row {idx}")
         tasks.append(filter_comments(idx, row['text'], print_output=True))
 
-    print(f"Starting {len(tasks)} asynchronous LLM generation tasks...")
+    logging.info(f"Starting {len(tasks)} asynchronous LLM generation tasks...")
 
     results = await asyncio.gather(*tasks)
-    print("All LLM tasks completed.")
+    logging.info("All LLM tasks completed.")
 
+    indices_to_drop = []
     for idx, response_text in results:
-            
-        if isinstance(response_text, str):
-            output_dict = json.loads(response_text)
-        else:
-            output_dict = response_text
-            
-        if output_dict.get('useful', 0) == 0:
-            logging.debug(f"Row {idx} is not useful, delete it and continue.")
-            filtered_df = filtered_df[filtered_df.index != idx]
+        try:
+            if isinstance(response_text, str):
+                output_dict = json.loads(response_text)
+            else:
+                output_dict = response_text
+        except Exception as e:
+            logging.error(f"Failed to parse response for row {idx}: {e}")
+            indices_to_drop.append(idx)
             continue
 
-            
+        if output_dict.get('useful', 0) == 0:
+            logging.debug(f"Row {idx} is not useful, marking for deletion.")
+            indices_to_drop.append(idx)
+
+    # Drop all non-useful rows at once
+    filtered_df = filtered_df.drop(indices_to_drop)
+    logging.info(f"Filtered DataFrame now has {len(filtered_df)} rows.")
+
     # Save the filtered DataFrame to a GeoJSON file
     #filtered_df.to_file(OUT_VECTOR, driver="GeoJSON")
-    #print(f"GeoJSON file {OUT_VECTOR} created.")
+    #logging.info(f"GeoJSON file {OUT_VECTOR} created.")
 
 
 if __name__ == "__main__":
