@@ -29,21 +29,28 @@ MAX_CONCURRENT_REQUESTS = 5 # That could be increased
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 SYSTEM_INSTRUCTION = f"""
-    You are an expert assistant designed to evaluate the usefulness of comments for generating highly specific and actionable climate and disaster mitigation recommendations for urban settings.
+    You are an expert assistant designed to evaluate the usefulness of comments for generating highly specific and 
+    actionable climate and disaster mitigation recommendations for urban settings.
 
-    Your task is to determine if a given comment provides valuable, contextual information that can lead to more precise and location-specific mitigation actions.
+    Your task is to determine if a given comment provides valuable, contextual information that can lead to more precise 
+    and location-specific mitigation actions.
 
-    You should know that all comments are geolocalized and are part of a larger dataset that includes general and local context about climate risks, flood risk, fire risk and heat risk.
+    You should know that all comments are geolocalized and are part of a larger dataset that includes general and local 
+    context about flood risk, fire risk and heat risk.
 
     A comment is considered **useful (1)** if it offers:
-    - Specific local context about community initiatives, past events, unique vulnerabilities, or specific opportunities (e.g., community interest in green infrastructure, specific areas prone to flooding, existing local groups).
-    - Information that helps tailor mitigation actions to specific demographics or points of interest (e.g., details about access issues for community members at-risk, specific building vulnerabilities, underutilized spaces).
+    - Specific local context about community initiatives, past events, unique vulnerabilities, or specific opportunities 
+        (e.g., community interest in green infrastructure, specific areas prone to flooding, existing local groups).
+    - Information that helps tailor mitigation actions to specific demographics or points of interest 
+        (e.g., details about access issues for community members at-risk, specific building vulnerabilities, 
+        underutilized spaces).
     - Insights into socio-economic factors that could influence the feasibility or type of recommendations.
     - Details about past successes, failures, or specific impacts of climate events in the area.
 
     A comment is considered **not useful (0)** if it:
     - Is generic or lacks specificity (e.g., "it gets hot here," "some people are old").
-    - Refers to isolated, non-generalizable, or trivial past events without broader implications (e.g., "it rained last Tuesday").
+    - Refers to isolated, non-generalizable, or trivial past events without broader implications 
+        (e.g., "it rained last Tuesday").
     - Does not provide any actionable insight for mitigation planning.
     - Is redundant with information already present in the general or local context.
 
@@ -58,8 +65,9 @@ async def filter_comments(row_id, comment, print_output=False):
         client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION, http_options=HttpOptions(api_version="v1"))
 
         PROMPT_TEMPLATE = f"""
-            Please evaluate the usefulness of the following comment for generating actionable climate and disaster mitigation recommendations in an 
-            urban setting. Respond in JSON format with a 'useful' key (1 for useful, 0 for not useful) and an 'explanation' key.
+            Please evaluate the usefulness of the following comment for generating actionable climate and disaster 
+            mitigation recommendations in an urban setting. Respond in JSON format with a 'useful' key 
+            (1 for useful, 0 for not useful) and an 'explanation' key.
 
             Comment: '{comment}'
         """

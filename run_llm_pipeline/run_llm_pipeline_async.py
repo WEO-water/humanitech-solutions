@@ -12,8 +12,10 @@ import json
 from shapely import wkt
 import time
 
+import asyncio
+from tenacity import retry, wait_random_exponential, stop_after_attempt
 
-from prompt_func import generate_risk_actions, map_data
+from run_llm_pipeline.prompt_func import generate_risk_actions, map_data, cache_files
 from tqdm import tqdm
 import logging
 
@@ -25,6 +27,7 @@ logging.basicConfig(
         logging.FileHandler("run_llm_pipeline.log", mode='a')
     ]
 )
+
 
 
 def save_checkpoint(rows, checkpoint_file, geometry_col="geometry", crs="EPSG:4326", subset_col="h3_10"):
@@ -40,7 +43,8 @@ def save_checkpoint(rows, checkpoint_file, geometry_col="geometry", crs="EPSG:43
 
 
 def main():
-    
+    start_time = time.time()
+
     # Initialize checkpoint
     if os.path.exists(CHECKPOINT_FILE):
         checkpoint_gdf = gpd.read_file(CHECKPOINT_FILE)
@@ -64,6 +68,8 @@ def main():
     filtered_df = gpd.GeoDataFrame(filtered_df, crs='EPSG:4326') 
     for col in ['heat_risk', 'flood_risk', 'fire_risk_202502']:
         filtered_df[col] = pd.to_numeric(filtered_df[col], errors='coerce').astype('Int64')
+    
+    #filtered_df = filtered_df.iloc[:100]  # For testing purposes, limit to first 100 rows
     print(f"Number of rows in filtered DataFrame: {len(filtered_df)}")
 
     # Create the general context string
@@ -79,9 +85,13 @@ def main():
     unprocessed_count = total_rows - len(processed_h3_indices)
     pbar = tqdm(total=unprocessed_count, desc="Processing rows")
 
+    # cache files gemini
+    cached_files = cache_files(pdf_uri=PDF_URI_LST, explain=EXPLAIN)
+
     output_rows_all = []
     output_rows = []
 
+    tasks = []
     for idx, row in filtered_df.iterrows():
         h3_index = row['h3_10']
         
@@ -100,7 +110,8 @@ def main():
                 if col in row and pd.notna(row[col])
             ]
             pois_combined = ', '.join(pois_list) if pois_list else 'nan'
-            output = generate_risk_actions(
+            tasks.append(generate_risk_actions(
+                row_id=idx,
                 municipality_context=general_context_str,
                 heat_risk=f"{int(row['heat_risk'])}/4 or {map_data['heat_risk'][heat_risk_idx]}" if heat_risk_idx is not None else 'nan',
                 flood_risk=f"{int(row['flood_risk'])}/4 or {map_data['flood_risk'][flood_risk_idx]}" if flood_risk_idx is not None else 'nan',
@@ -123,14 +134,39 @@ def main():
                 emergency_assemble_areas=f"In this area there is an emergency assemble area: {row['emergency_assemble_areas']}" if pd.notna(row['emergency_assemble_areas']) else 'nan',
                 comments=f"Somebody from the community made a comment, take this comment in high regard when coming up with your solutions: {row['comments']}" if pd.notna(row['comments']) else 'nan',
                 pdf_uri=PDF_URI_LST,
+                cache=cached_files,
                 explain=EXPLAIN,
-                print_output=False
-            )
+                print_output=True # Set to True to print output for debugging
+            ))
 
+        except Exception as e:
+            if "RESOURCE_EXHAUSTED" in str(e):
+                print(f"RESOURCE_EXHAUSTED error at row {idx}, sleeping 60s and retrying...", file=sys.stderr)
+                time.sleep(60)
+                continue  # This will re-enter the for loop with the same row (since nothing was added to processed_h3_indices)
+            else:
+                print(f"Error processing row {idx}: {e}", file=sys.stderr)
+                continue
+
+    print(f"Starting {len(tasks)} asynchronous LLM generation tasks...")
+
+    async def run_all_tasks(tasks):
+        return await asyncio.gather(*tasks)
+
+    results = asyncio.run(run_all_tasks(tasks))
+    print("All LLM tasks completed.")
+
+    for idx, output in results:
+        try:
+            logging.debug(f"Processing output for row {idx}")
+            row = filtered_df.iloc[idx]
+            # Check if output is a string and parse it as JSON
+            
             if isinstance(output, str):
                 output_dict = json.loads(output)
             else:
                 output_dict = output
+
             row_dict = {
                 "felt:h3_index": row["felt:h3_index"],
                 "h3_10": row["h3_10"],
@@ -161,6 +197,9 @@ def main():
                 output_rows_all.append(output_rows)
                 output_rows = []
 
+            #if EXIT and len(processed_h3_indices) >= EXIT:
+            #    logging.debug(f"Exit condition met after processing {len(processed_h3_indices)} rows.")
+            #    break
             
         except Exception as e:
             if "RESOURCE_EXHAUSTED" in str(e):
@@ -173,11 +212,18 @@ def main():
             
 
 
-    output_gdf = gpd.GeoDataFrame(output_rows_all, geometry="geometry", crs='EPSG:4326')
-    # output_gdf = gpd.GeoDataFrame(output_gdf) 
-    output_gdf.to_file(OUT_VECTOR, driver="GeoJSON")
-    print(f"GeoJSON file {OUT_VECTOR} created.")
+    # Flatten output_rows_all (list of lists) to a single list of dicts
+    all_rows = [row for batch in output_rows_all for row in batch] + output_rows
 
+    if all_rows:
+        output_gdf = gpd.GeoDataFrame(all_rows, geometry="geometry", crs='EPSG:4326')
+        output_gdf.to_file(OUT_VECTOR, driver="GeoJSON")
+        print(f"GeoJSON file {OUT_VECTOR} created.")
+    else:
+        print("No output rows to save.")
+
+    elapsed = time.time() - start_time
+    print(f"Total processing time: {elapsed:.2f} seconds")
 
 if __name__ == "__main__":
 
@@ -190,11 +236,15 @@ if __name__ == "__main__":
     ]
 
     #Outputs
-    CHECKPOINT_FILE = "humanitech_dargo_emergency_solutions_v300_checkpoint.geojson"
-    OUT_VECTOR = "humanitech_dargo_emergency_solutions_v300.geojson"
+    CHECKPOINT_FILE = "rh_async_humanitech_dargo_emergency_solutions_v300_checkpoint.geojson"
+    OUT_VECTOR = "rh_async_humanitech_dargo_emergency_solutions_v300.geojson"
 
     # Configuration
     BATCH_SIZE = 10  # Save after every 10 rows
+    EXIT = 10 # Exit after processing this many rows
     EXPLAIN = True  
 
     main()
+
+    hf_iI YSpS Abdd jyIj qxKp KtJS suVa vGqF ngIi
+
