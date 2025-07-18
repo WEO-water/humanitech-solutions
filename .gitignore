@@ -210,3 +210,5 @@ __marimo__/
 humanitech/output/*
 *.csv
 *.zip
+*.geojson
+*.log

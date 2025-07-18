@@ -28,7 +28,7 @@ from tenacity import retry, wait_random_exponential, stop_after_attempt
 from tqdm import tqdm
 import logging
 
-from run_llm_pipeline.prompt_func import generate_risk_actions, map_data, cache_files, prepare_prompt_systemprompt_files, RiskActions, RiskActions_and_explanation
+from run_llm_pipeline.prompt_func import generate_risk_actions, map_data, cache_files, prepare_prompt_systemprompt_files_batch, RiskActions, RiskActions_and_explanation
 from upload_gcs import upload_to_gcs_without_timestamp
 
 # Constants
@@ -193,7 +193,7 @@ def create_jsonl_file(explain=False):
         ]
         pois_combined = ', '.join(pois_list) if pois_list else 'nan'
 
-        row_id, pdf_files, system_instruction, prompt = prepare_prompt_systemprompt_files(
+        row_id, pdf_files, system_instruction, prompt = prepare_prompt_systemprompt_files_batch(
             row_id=idx,
             municipality_context=general_context_str,
             heat_risk=f"{int(row['heat_risk'])}/4 or {map_data['heat_risk'][heat_risk_idx]}" if heat_risk_idx is not None else 'nan',

@@ -11,23 +11,61 @@ import matplotlib.pyplot as plt
 import json
 from shapely import wkt
 import time
-
+import h3
 import asyncio
 from tenacity import retry, wait_random_exponential, stop_after_attempt
 
-from run_llm_pipeline.prompt_func import generate_risk_actions, map_data, cache_files
+from .prompt_func import generate_risk_actions, map_data, cache_files
 from tqdm import tqdm
 import logging
+
+import get_data
 
 # Set up logging to file only
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler("run_llm_pipeline.log", mode='a')
+        logging.FileHandler("new_comments_run_llm_pipeline_async.log", mode='a')
     ]
 )
 
+FELT_DATA_DIR = 'gs://dl-test-439308-bucket/weo-data/dashboard'#'/mnt/fvw/data/tmp/humanitech/dashboard'
+COMMENTS_TS = '20250708_164650'
+DB_PTH_DCT = {
+    
+    'metrics': 'Heat-Risk-.zip',
+    'medical_care': 'medical_care.geojson',
+    'climate_driven_impassable_roads': 'climate_driven_impassable_roads.geojson',
+    'densely_populated_at_risk_people': 'densely_populated_at_risk_people.geojson',
+    'emergency_assemble_areas': 'emergency_assemble_areas.geojson',
+    'places_of_interest': 'places_of_interest.geojson',
+    'comments': f'comments_{COMMENTS_TS}.zip',
+
+}
+
+INDEX = column_to_merge_on = 'h3_10'
+
+NEW_COMMENTS = True
+GET_DATA = False
+COMMENTS_PTH = "gs://dl-test-439308-bucket/weo-data/dashboard/comments_20250708_160451.zip"
+
+    #Inputs
+DATABASE_PTH = 'gs://dl-test-439308-bucket/weo-data/humanitech_dargo_filtered_database_250620.csv'
+PDF_URI_LST = [
+        'gs://dl-test-439308-bucket/weo-data/2021 Dargo, Census All persons QuickStats _ Australian Bureau of Statistics.pdf',
+        'gs://dl-test-439308-bucket/weo-data/climate-ready-communities-a-guide-to-getting-started.pdf',
+        'gs://dl-test-439308-bucket/weo-data/Dargo Rear v8 - final.pdf'
+    ]
+
+    #Outputs
+CHECKPOINT_FILE = "rh_async_humanitech_dargo_emergency_solutions_v300_checkpoint.geojson"
+OUT_VECTOR = "rh_async_humanitech_dargo_emergency_solutions_v300.geojson"
+
+    # Configuration
+BATCH_SIZE = 10  # Save after every 10 rows
+EXIT = 10 # Exit after processing this many rows
+EXPLAIN = True  
 
 
 def save_checkpoint(rows, checkpoint_file, geometry_col="geometry", crs="EPSG:4326", subset_col="h3_10"):
@@ -41,8 +79,36 @@ def save_checkpoint(rows, checkpoint_file, geometry_col="geometry", crs="EPSG:43
     else:
         tmp_gdf.drop_duplicates(subset=subset_col).to_file(checkpoint_file, driver="GeoJSON")
 
+def get_comments_h3(path):
 
-def main():
+    comments = gpd.read_file(path)
+
+    # Handle different geometry types for H3 assignment
+    if comments.geometry.iloc[0].geom_type == "Point":
+        # For Point geometries, assign H3 index directly
+        comments = comments.h3.geo_to_h3(resolution=10, set_index=False)
+    elif comments.geometry.iloc[0].geom_type == "MultiPoint":
+        # For MultiPoint geometries, calculate centroid and assign H3 index
+        comments = comments.explode(ignore_index=True)
+        comments = comments.h3.geo_to_h3(resolution=10, set_index=False)
+    elif comments.geometry.iloc[0].geom_type == "Polygon":
+        comments = comments.h3.polyfill(10+4, explode=True).set_index('h3_polyfill').h3.h3_to_parent_aggregate(10, operation = {'emergency_assemble_areas': 'first',})  # Take the first value in each group# Add other columns as needed, e.g., 'count': 'sum'
+        comments = comments.reset_index()
+    else: 
+        print(f"Unsupported geometry type {comments.geometry.iloc[0].geom_type} in {path}. Skipping H3 assignment.", file=sys.stderr)
+    
+    comments['h3_10_int'] = comments['h3_10'].apply(lambda x: int(x, 16) if pd.notna(x) else None)
+
+    #pd.set_option('display.max_columns', None)
+    #print("comments columns = ")
+    #print(comments.columns)
+    print("comments head")
+    print(comments.head())
+    list = comments['h3_10'].tolist()
+
+    return list
+
+def main(NEW_COMMENTS, GET_DATA, COMMENTS_PTH, DATABASE_PTH, PDF_URI_LST, CHECKPOINT_FILE, OUT_VECTOR, BATCH_SIZE, EXIT, EXPLAIN):
     start_time = time.time()
 
     # Initialize checkpoint
@@ -56,20 +122,26 @@ def main():
 
     logging.debug(f"Already processed {len(processed_h3_indices)} H3 indices stores in {CHECKPOINT_FILE}")
 
-
+    if GET_DATA:
+        database_pth = get_data(data_dir=FELT_DATA_DIR, db_pth_dct=DB_PTH_DCT, index=INDEX)
+    else:
+        database_pth = DATABASE_PTH
     #Read FELT derived database for risk and other inputs
-    filtered_df = gpd.read_file(DATABASE_PTH, 
+    filtered_df = gpd.read_file(database_pth, 
                                 dtype={
             'heat_risk': 'Float64',
             'flood_risk': 'Int64',
             'fire_risk_202502': 'Int64'
         })
+    
+    #print("filtered df head = ")
+    #print(filtered_df.head())
     filtered_df['geometry'] = filtered_df['geometry'].apply(wkt.loads)  # Convert WKT strings to geometries
     filtered_df = gpd.GeoDataFrame(filtered_df, crs='EPSG:4326') 
     for col in ['heat_risk', 'flood_risk', 'fire_risk_202502']:
         filtered_df[col] = pd.to_numeric(filtered_df[col], errors='coerce').astype('Int64')
     
-    #filtered_df = filtered_df.iloc[:100]  # For testing purposes, limit to first 100 rows
+    filtered_df = filtered_df.iloc[:10]  # For testing purposes, limit to first 100 rows
     print(f"Number of rows in filtered DataFrame: {len(filtered_df)}")
 
     if not filtered_df['h3_10'].is_unique:
@@ -78,7 +150,6 @@ def main():
         # For this example, we'll assume the first occurrence is used.
         filtered_df = filtered_df.drop_duplicates(subset=['h3_10'])
 
-    h3_lookup = filtered_df.set_index('h3_10')
 
     # Create the general context string
     general_context_str = '''
@@ -94,18 +165,40 @@ def main():
     pbar = tqdm(total=unprocessed_count, desc="Processing rows")
 
     # cache files gemini
-    cached_files = cache_files(pdf_uri=PDF_URI_LST, explain=EXPLAIN, time="20000s")
+    cached_files = cache_files(pdf_uri=PDF_URI_LST, explain=EXPLAIN)
 
     output_rows_all = []
     output_rows = []
 
     tasks = []
-    for idx, row in filtered_df.iterrows():
+
+    if NEW_COMMENTS: 
+        logging.info("NEW_COMMENTS flag is True. Processing only H3 indices with new comments.")
+        new_comments_h3_indices = get_comments_h3(FELT_DATA_DIR + "/" + DB_PTH_DCT.get('comments'))
+        print(f"Number of rows in new comments list: {len(new_comments_h3_indices)}")
+        print(new_comments_h3_indices)
+        filtered_df['h3_10'] = filtered_df['h3_10'].astype(str)
+        #print(filtered_df.head())
+        # Filter the main DataFrame to get only the rows corresponding to new comments
+        # Use .loc for index lookup
+        rows_to_process_df = filtered_df[filtered_df['h3_10'].isin(new_comments_h3_indices)]
+        #print(rows_to_process_df.head())
+        print(f"Number of rows in rows to process: {len(rows_to_process_df)}")
+
+        processed_h3_indices.difference_update(new_comments_h3_indices)
+        logging.debug(f"Removed {len(new_comments_h3_indices)} H3 indices with new comments from processed set for re-processing.")
+
+        if rows_to_process_df.empty:
+            print("No matching H3 indices found in the main database for the new comments. Exiting.")
+            return # Exit if no relevant rows to process
+    else:
+        logging.info("NEW_COMMENTS flag is False. Processing all unprocessed H3 indices.")
+        # Filter out already processed rows if NEW_COMMENTS is False
+        rows_to_process_df = filtered_df[~filtered_df['h3_10'].isin(processed_h3_indices)]
+
+    h3_lookup = rows_to_process_df.set_index('h3_10')
+    for idx, row in rows_to_process_df.iterrows():
         h3_index = row['h3_10']
-        
-        # Skip already processed rows
-        if h3_index in processed_h3_indices:
-            continue
         
         try:
             logging.debug(f"Processing row {idx} with H3 index {h3_index}")
@@ -144,7 +237,7 @@ def main():
                 pdf_uri=PDF_URI_LST,
                 cache=cached_files,
                 explain=EXPLAIN,
-                print_output=True # Set to True to print output for debugging
+                print_output=False # Set to True to print output for debugging
             ))
 
         except Exception as e:
@@ -158,11 +251,13 @@ def main():
 
     print(f"Starting {len(tasks)} asynchronous LLM generation tasks...")
 
-    async def run_all_tasks(tasks):
-        return await asyncio.gather(*tasks)
+    async def run_all_tasks(tasks_list):
+        return await asyncio.gather(*tasks_list)
 
     results = asyncio.run(run_all_tasks(tasks))
     print("All LLM tasks completed.")
+
+    #print(len(results))
 
     for h3_index, output in results: 
         try:
@@ -177,7 +272,7 @@ def main():
 
             row_dict = {
                 "felt:h3_index": row["felt:h3_index"],
-                "h3_10": row["h3_10"],
+                "h3_10": h3_index,
                 "geometry": row["geometry"] if "geometry" in row else None,
             }
             for risk_type in ["fire", "flood", "heat"]:
@@ -205,19 +300,26 @@ def main():
                 output_rows_all.append(output_rows)
                 output_rows = []
 
-            if EXIT and len(processed_h3_indices) >= EXIT:
-                logging.debug(f"Exit condition met after processing {len(processed_h3_indices)} rows.")
-                break
+            #if EXIT and len(processed_h3_indices) >= EXIT:
+            #    logging.debug(f"Exit condition met after processing {len(processed_h3_indices)} rows.")
+            #    break
             
         except Exception as e:
             if "RESOURCE_EXHAUSTED" in str(e):
                 print(f"RESOURCE_EXHAUSTED error at row {idx}, sleeping 60s and retrying...", file=sys.stderr)
                 time.sleep(60)
                 continue  # This will re-enter the for loop with the same row (since nothing was added to processed_h3_indices)
-            #else:
-                #print(f"Error processing row {idx}: {e}", file=sys.stderr)
-                #continue
+            else:
+                print(f"Error processing row {idx}: {e}", file=sys.stderr)
+                continue
             
+    pbar.close()
+
+    # Save any remaining rows in output_rows after the loop finishes
+    if output_rows:
+        save_checkpoint(output_rows, CHECKPOINT_FILE)
+        logging.debug(f"Final checkpoint saved for remaining {len(output_rows)} rows.")
+        output_rows_all.append(output_rows)        
 
 
     # Flatten output_rows_all (list of lists) to a single list of dicts
@@ -225,15 +327,24 @@ def main():
 
     if all_rows:
         output_gdf = gpd.GeoDataFrame(all_rows, geometry="geometry", crs='EPSG:4326')
-        output_gdf.to_file(OUT_VECTOR, driver="GeoJSON")
-        print(f"GeoJSON file {OUT_VECTOR} created.")
+        if os.path.exists(CHECKPOINT_FILE):
+            final_output_gdf = gpd.read_file(CHECKPOINT_FILE)
+            final_output_gdf.to_file(OUT_VECTOR, driver="GeoJSON")
+            print(f"GeoJSON file {OUT_VECTOR} created from checkpoint.")
+        else:
+            # This case should ideally not happen if processing successfully started
+            output_gdf.to_file(OUT_VECTOR, driver="GeoJSON")
+            print(f"GeoJSON file {OUT_VECTOR} created (from current run's results).")
     else:
-        print("No output rows to save.")
+        print("No output rows to save in the final output file.")
 
     elapsed = time.time() - start_time
     print(f"Total processing time: {elapsed:.2f} seconds")
 
 if __name__ == "__main__":
+    NEW_COMMENTS = False
+    GET_DATA = False
+    COMMENTS_PTH = "gs://dl-test-439308-bucket/weo-data/dashboard/comments_20250708_160451.zip"
 
     #Inputs
     DATABASE_PTH = 'gs://dl-test-439308-bucket/weo-data/humanitech_dargo_filtered_database_250620.csv'
@@ -252,6 +363,6 @@ if __name__ == "__main__":
     EXIT = 10 # Exit after processing this many rows
     EXPLAIN = True  
 
-    main()
+    main(NEW_COMMENTS, GET_DATA, COMMENTS_PTH, DATABASE_PTH, PDF_URI_LST, CHECKPOINT_FILE, OUT_VECTOR, BATCH_SIZE, EXIT, EXPLAIN)
 
 

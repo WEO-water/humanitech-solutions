@@ -71,7 +71,7 @@ class RiskActions_and_explanation(BaseModel):
     flood:List[str]
     explanation_flood:List[str]
 
-def cache_files(pdf_uri, explain=False):
+def cache_files(pdf_uri, explain=False, time='20000s'):
 
     SYSTEM_INSTRUCTION = prepare_system_prompt(explain) # When referencing assembly areas, always refer as 'community nominated assembly area' instead of using their names
 
@@ -86,7 +86,7 @@ def cache_files(pdf_uri, explain=False):
             display_name='dargo_files_SystemPrompt', # used to identify the cache
             system_instruction=SYSTEM_INSTRUCTION,
             contents=[PDF_FILES],
-            ttl="20000s",
+            ttl=time,
         )
     )
 
@@ -103,7 +103,6 @@ async def generate_risk_actions(row_id, municipality_context, heat_risk, flood_r
         client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION, http_options=HttpOptions(api_version="v1"))
 
         PROMPT_TEMPLATE = prepare_prompt_risk_action(
-            row_id=row_id,
             municipality_context=municipality_context,
             heat_risk=heat_risk,
             flood_risk=flood_risk,
@@ -127,9 +126,9 @@ async def generate_risk_actions(row_id, municipality_context, heat_risk, flood_r
             comments=comments,
             pdf_uri=pdf_uri, #synthesis_pdf, #pdf_uri, # synthesis_pdf, # cache=cached_files, 
             cache=cache, 
-            explain=explain, 
             print_output=print_output
         )
+
 
         try:
             #Generate the structured response
@@ -211,8 +210,24 @@ def prepare_prompt_risk_action(municipality_context, heat_risk, flood_risk, fire
         """
     return prompt
 
-
 def prepare_system_prompt(explain=False):
+    
+    system_instruction = f"""
+    You are an environmental expert creating actionable mitigation recommendations for climate and disaster resilience in urban settings.
+
+    Below is a description of the current risks and environmental conditions for a municipality and a specific local zone. You are tasked with generating mitigation actions tailored to that zone's risks, demographic context, and relevant points of interest.
+
+    Use clear language and address actions that can be taken both by individuals and by local authorities. Use bullet points where helpful. Be specific, not generic. 
+    When referring to community members, use 'community members at-risk' instead of terms like 'elderly' or 'vulnerable' that may not be appropriate in all contexts.
+
+    🎯 TASK:
+    Based on this information, list **concise practical and location-specific mitigation actions** that can reduce climate and disaster risks in the local area. Structure them by risk type (e.g., Heat, Flood, Fire). Include targeted suggestions related to nearby POIs or vulnerable populations.
+
+    {OUTPUT_RISK if not explain else OUTPUT_RISK_EXPLAIN}
+    """  
+    return system_instruction
+
+def prepare_system_prompt_batching(explain=False):
     
     system_instruction = """
     You are an environmental expert creating actionable mitigation recommendations for climate and disaster resilience in 
@@ -290,13 +305,13 @@ def prepare_files_for_jsonl(pdf_uri):
     else:
         return None
 
-def prepare_prompt_systemprompt_files(row_id, municipality_context, heat_risk, flood_risk, fire_risk, lst_day, lst_night,
+def prepare_prompt_systemprompt_files_batch(row_id, municipality_context, heat_risk, flood_risk, fire_risk, lst_day, lst_night,
                           sealed_surface_pct, canopy_cover_pct, elevation, river_proximity,
                           flood_plain, tree_count, flammability, tree_connectivity,
                           fire_history_info, population_density, vulnerable_groups, pois, climate_driven_impassable_roads,
                           emergency_assemble_areas, comments, pdf_uri=None, synthesis_pdf=None, cache=None, explain=False, print_output=False):
     pdf_files = prepare_files_for_jsonl(pdf_uri)
-    system_instruction = prepare_system_prompt(explain)
+    system_instruction = prepare_system_prompt_batching(explain)
     prompt = prepare_prompt_risk_action(
             municipality_context=municipality_context,
             heat_risk=heat_risk,

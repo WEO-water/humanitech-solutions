@@ -15,7 +15,7 @@ from google.cloud import storage
 # example for running this script:
 # python3 comments/upload_gcs.py comments/comments.csv dl-test-439308-bucket --gcs_prefix weo-data/comments/
 
-def upload_to_gcs_with_timestamp(bucket_name, local_file_path, gcs_prefix=""):
+def upload_gcs(bucket_name, local_file_path, gcs_prefix=""):
     """
     Uploads a local file to a GCS bucket with a timestamp appended to its name.
 
@@ -59,8 +59,11 @@ def upload_to_gcs_with_timestamp(bucket_name, local_file_path, gcs_prefix=""):
         # Upload the file
         blob.upload_from_filename(local_file_path)
 
-        print(f"File '{local_file_path}' successfully uploaded to gs://{bucket_name}/{destination_blob_name}")
-        return True
+        out_path = f"gs://{bucket_name}/{destination_blob_name}"
+
+        print(f"File '{local_file_path}' successfully uploaded {out_path}")
+
+        return out_path
 
     except Exception as e:
         print(f"Error uploading '{local_file_path}' to GCS: {e}")
@@ -76,4 +79,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Call the upload function
-    upload_to_gcs_with_timestamp(args.gcs_bucket, args.local_file_path, args.gcs_prefix)
+    upload_gcs(args.gcs_bucket, args.local_file_path, args.gcs_prefix)
