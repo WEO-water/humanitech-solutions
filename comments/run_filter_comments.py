@@ -15,8 +15,8 @@ import time
 import asyncio
 from tenacity import retry, wait_random_exponential, stop_after_attempt
 
-from comments.prompt_filter_comments import filter_comments
-from upload_gcs import upload_to_gcs_with_timestamp
+from prompt_filter_comments import filter_comments
+from upload_gcs import upload_gcs
 from tqdm import tqdm
 import logging
 
@@ -74,14 +74,14 @@ async def main():
 
 if __name__ == "__main__":
 
-    COMMENTS_TS = '20250708_164650'
+    COMMENTS_TS = '20250723_142828' # thats the original one for now
 
     #Inputs
     COMMENTS_PTH = f"gs://dl-test-439308-bucket/weo-data/dashboard/comments_{COMMENTS_TS}.zip"
 
     #Outputs
     CHECKPOINT_FILE = f"comments_filtering_checkpoint_{COMMENTS_TS}.geojson"
-    OUT_VECTOR = f"comments_filtered_{COMMENTS_TS}.geojson"
+    OUT_VECTOR = f"comments_filtered_{COMMENTS_TS}_cleaned.geojson"
 
     try:
         asyncio.run(main())
@@ -95,4 +95,6 @@ if __name__ == "__main__":
     os.system(f"zip comments.zip {OUT_VECTOR}")
 
     # upload this into GCS bucket:
-    upload_to_gcs_with_timestamp(bucket_name="dl-test-439308-bucket", local_file_path="comments.zip", gcs_prefix="weo-data/dashboard/")
+    path = upload_gcs(bucket_name="dl-test-439308-bucket", local_file_path="comments.zip", gcs_prefix="weo-data/dashboard/")
+
+    print("Uploaded to GCS succesfully. Path = " + path)

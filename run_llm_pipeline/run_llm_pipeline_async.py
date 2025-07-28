@@ -1,3 +1,13 @@
+# price indication : 
+# IF FLASH LITE VERSION :
+# 0.89$ per 1000 rows
+# it is 2.31$ for these 2600 rows
+
+# FlASH VERSION :
+# 3.88$ for 1000 rows OR 2.949$ with batching
+# it is 10.09$ for 2600 rows OR 7.66$ with batching
+
+
 import os
 import pandas as pd
 import geopandas as gpd
@@ -15,7 +25,7 @@ import time
 import asyncio
 from tenacity import retry, wait_random_exponential, stop_after_attempt
 
-from run_llm_pipeline.prompt_func import generate_risk_actions, map_data, cache_files
+from prompt_func import generate_risk_actions, map_data, cache_files
 from tqdm import tqdm
 import logging
 
@@ -69,7 +79,7 @@ def main():
     for col in ['heat_risk', 'flood_risk', 'fire_risk_202502']:
         filtered_df[col] = pd.to_numeric(filtered_df[col], errors='coerce').astype('Int64')
     
-    #filtered_df = filtered_df.iloc[:100]  # For testing purposes, limit to first 100 rows
+    filtered_df = filtered_df.iloc[:2]  # For testing purposes, limit to first 100 rows
     print(f"Number of rows in filtered DataFrame: {len(filtered_df)}")
 
     if not filtered_df['h3_10'].is_unique:

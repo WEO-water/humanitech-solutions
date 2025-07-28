@@ -35,7 +35,7 @@ from tenacity import retry, wait_random_exponential, stop_after_attempt
 
 PROJECT_ID = "dl-test-439308"
 
-MODEL_ID = "gemini-2.5-flash"
+MODEL_ID = "gemini-2.5-flash" #-lite"
 LOCATION = os.environ.get("GOOGLE_CLOUD_REGION", "global")
 
 # Concurrency settings for API calls

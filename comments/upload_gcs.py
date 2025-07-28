@@ -13,7 +13,7 @@ from google.cloud import storage
 # gcs_prefix = "weo-data/dashboard/"
 
 # example for running this script:
-# python3 upload_gcs.py /home/robin-hamers/Downloads/weo-data_dashboard_comments_20250708_160451/comments.zip dl-test-439308-bucket --gcs_prefix weo-data/dashboard/
+# python3 comments/upload_gcs.py comments/comments.csv dl-test-439308-bucket --gcs_prefix weo-data/comments/
 
 def upload_gcs(bucket_name, local_file_path, gcs_prefix=""):
     """
@@ -25,7 +25,7 @@ def upload_gcs(bucket_name, local_file_path, gcs_prefix=""):
         gcs_prefix (str): An optional prefix/folder path within the GCS bucket
                           (e.g., 'data/', 'exports/').
     Returns:
-        bool: True if the upload was successful, False otherwise.
+        bool: Path of output file, False otherwise.
     """
     try:
         # Initialize the GCS client

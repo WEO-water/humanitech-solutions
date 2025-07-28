@@ -1,3 +1,9 @@
+######### PROBLEM at the moment :
+######### there is no possibility to ask for JSON as a response (only while prompting and this is not consistent)
+######### - solution 1 : wait google to release this functionnality (should be released later)
+######### - solution 2 : use another instance of gemini (lighter one) to transform the response into valid JSON if it is not
+######### - solution 3 : same with a small model we deploy on vertex ai (could cost more if we don't use it a lot) 
+
 import os
 import sys
 import time

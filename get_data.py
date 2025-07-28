@@ -8,10 +8,10 @@ import numpy as np
 import h3pandas
 
 
-import upload_gcs
+from upload_gcs import upload_gcs
 
 FELT_DATA_DIR = 'gs://dl-test-439308-bucket/weo-data/dashboard'#'/mnt/fvw/data/tmp/humanitech/dashboard'
-COMMENTS_TS = '20250708_164650'
+COMMENTS_TS = '20250723_143158'
 DB_PTH_DCT = {
     
     'metrics': 'Heat-Risk-.zip',
@@ -149,7 +149,7 @@ def get_data(data_dir=FELT_DATA_DIR, db_pth_dct=DB_PTH_DCT, index=INDEX):
     return gcs_path
 
 
-if __name__ == "main":
+if __name__ == "__main__":
 
     path = get_data()
     print("Path of the output = " + path)
