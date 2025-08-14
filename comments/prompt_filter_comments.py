@@ -21,7 +21,7 @@ from tenacity import retry, wait_random_exponential, stop_after_attempt
 
 PROJECT_ID = "dl-test-439308"  # 
 
-MODEL_ID = "gemini-2.5-flash"
+MODEL_ID = "gemini-2.5-flash-lite"
 LOCATION = os.environ.get("GOOGLE_CLOUD_REGION", "global")
 
 # Concurrency settings for API calls
@@ -29,31 +29,41 @@ MAX_CONCURRENT_REQUESTS = 5 # That could be increased
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 SYSTEM_INSTRUCTION = f"""
-    You are an expert assistant designed to evaluate the usefulness of comments for generating highly specific and actionable climate and disaster mitigation recommendations for urban settings.
+   You're right, those examples provide critical context that's essential for creating a comprehensive mitigation plan. Knowing about a single-lane bridge or a designated assembly area is just as useful as knowing about a flood risk. The prompt should be updated to explicitly recognize these types of comments.
+
+    Here is a revised version you can copy and paste that includes these new categories of useful comments.
+
+    You are an expert assistant designed to evaluate the usefulness of user comments for generating highly specific and actionable climate and disaster mitigation recommendations for urban settings.
 
     Your task is to determine if a given comment provides valuable, contextual information that can lead to more precise and location-specific mitigation actions for an environmental expert.
 
-    You should consider that all comments are geolocalized and are part of a larger dataset that includes general and local context about flood risk, fire risk, and heat risk for a specific municipality. However, for *this specific evaluation*, you should only assess the comment's inherent usefulness and specificity, not its redundancy with external information.
+    All comments are geolocalized, meaning they are tied to a specific point on a map. This localization is a critical piece of context. For this evaluation, you should only assess the comment's inherent usefulness and specificity, not its redundancy with external information.
 
-    A comment is considered **useful (1)** if it offers:
-    - **Specific local context:** Information about community initiatives, past local events (with broader implications), unique local vulnerabilities, or specific opportunities.
+    A comment is considered **useful (1)** if it offers a specific, localized insight that can directly inform or refine a mitigation strategy. This includes, but is not limited to:
+
+    - **Specific local vulnerabilities or opportunities:** Information about a particular building, street, or community space.
+        * **Example Useful:** "The old elementary school building always floods during heavy rains due to poor drainage on Main Street."
         * **Example Useful:** "There's a community garden on Elm Street that has been trying to implement rainwater harvesting but lacks funding."
-        * **Example Useful:** "The old elementary school building, now disused, always floods during heavy rains due to poor drainage on Main Street."
-    - **Tailored insights for demographics or points of interest:** Details about access issues for community members at-risk, specific building vulnerabilities, or underutilized spaces that can be leveraged.
-        * **Example Useful:** "Community members at-risk in the apartment complex near the park often struggle to access cooling centers during heatwaves due to limited public transport."
-    - **Socio-economic factors:** Information that could influence the feasibility or type of recommendations.
-        * **Example Useful:** "Many residents in this area are renters and are unable to make structural changes to their homes, impacting their ability to prepare for floods."
-    - **Details on past climate event impacts:** Information about specific successes, failures, or unique impacts of climate events in the area.
-        * **Example Useful:** "The last major hailstorm caused significant damage to solar panels installed on homes in the Northwood section, indicating a need for more resilient designs."
+    - **Infrastructure, logistical details, or designated areas:** Information about local infrastructure, access points, or designated zones for emergency response.
+        * **Example Useful:** "This is a single lane bridge."
+        * **Example Useful:** "This is also a helipad."
+        * **Example Useful:** "This is an assembly area."
+    - **Social or logistical factors unique to the location:** Details about how a specific location affects access for community members, or socio-economic factors that influence the feasibility of certain actions.
+        * **Example Useful:** "Community members in the apartment complex near the park often struggle to access cooling centers during heatwaves due to limited public transport."
+        * **Example Useful:** "Many residents here are renters and cannot make structural changes to their homes."
+    - **Local risk, resilience, or classification observations:** Direct observations or suggestions about a specific hazard, a lack of risk, or a recommended risk classification. The geolocalization makes these comments inherently useful.
+        * **Example Useful:** "This area is a high flood risk." (Because the location is known, this is a specific warning.)
+        * **Example Useful:** "The river near the bridge always overflows here during heavy rainfall."
+        * **Example Useful:** "This will never flood."
+        * **Example Useful:** "The length of the river should be High flood risk."
 
     A comment is considered **not useful (0)** if it:
-    - **Is generic or lacks specificity:** General statements without concrete details.
-        * **Example Not Useful:** "It gets really hot here in summer."
-        * **Example Not Useful:** "Some people are old and need help."
-    - **Refers to isolated, non-generalizable, or trivial past events:** Without broader implications for mitigation planning.
+
+    - **Is generic and lacks any actionable insight, even with localization:** Statements that are too broad to inform any specific action.
+        * **Example Not Useful:** "It's nice here."
+        * **Example Not Useful:** "I saw a tree."
+    - **Refers to trivial or isolated past events with no broader implications for mitigation planning, even when localized.**
         * **Example Not Useful:** "It rained heavily last Tuesday when I went to the market."
-    - **Does not provide any actionable insight for mitigation planning:** Information that doesn't help formulate a specific action.
-    - **Is merely an opinion or complaint without context.**
 
     Your output must be in JSON format.
 

@@ -40,7 +40,7 @@ async def main():
     tasks = []
     for idx, row in tqdm(filtered_df.iterrows(), total=len(filtered_df), desc="Scheduling tasks"):
         logging.debug(f"Processing row {idx}")
-        tasks.append(filter_comments(idx, row['text'], print_output=True))
+        tasks.append(filter_comments(idx, row['text'], print_output=False))
 
     logging.info(f"Starting {len(tasks)} asynchronous LLM generation tasks...")
 
@@ -61,7 +61,26 @@ async def main():
 
         if output_dict.get('useful', 0) == 0:
             logging.debug(f"Row {idx} is not useful, marking for deletion.")
+            print(f"Row {idx} is not useful, marking for deletion.")
+            print(filtered_df.iloc[idx]['text'])
+            print(f"Response: {response_text}")
+            print("--------------------------------------------------------")
             indices_to_drop.append(idx)
+    keep_comments = input("Do you want to keep some of these comments? (Y/n): ")
+    if keep_comments.lower() != "n":
+        while True:
+            comment_idx = input("Enter the index of the comment you want to keep (or 'done' to finish): ")
+            if comment_idx.lower() == "done":
+                break
+            try:
+                comment_idx = int(comment_idx)
+                if comment_idx in indices_to_drop:
+                    indices_to_drop.remove(comment_idx)
+                    logging.info(f"Row {comment_idx} marked for keeping.")
+                else:
+                    logging.warning(f"Row {comment_idx} is not marked for deletion.")
+            except ValueError:
+                logging.error("Invalid input, please enter a valid index.")
 
     # Drop all non-useful rows at once
     filtered_df = filtered_df.drop(indices_to_drop)
@@ -74,7 +93,7 @@ async def main():
 
 if __name__ == "__main__":
 
-    COMMENTS_TS = '20250723_142828' # thats the original one for now
+    COMMENTS_TS = '20250813_110132' # thats the original one for now
 
     #Inputs
     COMMENTS_PTH = f"gs://dl-test-439308-bucket/weo-data/dashboard/comments_{COMMENTS_TS}.zip"
@@ -91,10 +110,13 @@ if __name__ == "__main__":
         logging.error(f"Error occurred in main: {e}")
 
 
-    # zip the geojsonfile
-    os.system(f"zip comments.zip {OUT_VECTOR}")
+    # saving ?
+    saving = input("Do you want to save the results? (Y/n): ")
+    if saving.lower() != "n":
+        # zip the geojsonfile
+        os.system(f"zip comments.zip {OUT_VECTOR}")
 
-    # upload this into GCS bucket:
-    path = upload_gcs(bucket_name="dl-test-439308-bucket", local_file_path="comments.zip", gcs_prefix="weo-data/dashboard/")
+        # upload this into GCS bucket:
+        path = upload_gcs(bucket_name="dl-test-439308-bucket", local_file_path="comments.zip", gcs_prefix="weo-data/dashboard/")
 
-    print("Uploaded to GCS succesfully. Path = " + path)
+        print("Uploaded to GCS succesfully. Path = " + path)
