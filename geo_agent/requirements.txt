@@ -1,0 +1,10 @@
+pandas
+geopandas
+scikit-learn
+google-cloud-aiplatform
+google-generativeai
+pydantic
+tenacity
+ipython
+fsspec
+gcsfs
