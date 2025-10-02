@@ -5,25 +5,37 @@ import vertexai
 from vertexai.generative_models import GenerativeModel, Tool, FunctionDeclaration
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.cluster import DBSCAN
+import hdbscan
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.ensemble import RandomForestClassifier
+import shap
 import asyncio
 import json
 import sys
 import os
 from google import genai
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 
 from prompt_func import generate_risk_actions, cache_files, map_data
-
 
 # --- CONFIGURATION & CONSTANTS ---
 PROJECT_ID = "dl-test-439308"
 LOCATION = "europe-west1"
-DATABASE_PATH = "gs://dl-test-439308-bucket/weo-data/dashboard/df_export_20250912_090128.csv"
-VALIDATED_DATA_PATH = 'your_data_validated.csv'
-FINAL_SUMMARY_PATH = 'final_summary_gdf.csv'
-FINAL_COMPLETE_PATH_CSV = "final_complete_gdf.csv"
-FINAL_COMPLETE_PATH_GEOJSON = "final_data.geojson"
+DATABASE_PATH = "filtered_df.csv" #"gs://dl-test-439308-bucket/weo-data/dashboard/df_export_20250912_090128.csv"
 
-RUN_SOLUTION_GENERATION_LLM = True 
+# Define output directory and create it if it doesn't exist
+OUTPUT_DIR = "output"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+VALIDATED_DATA_PATH = os.path.join(OUTPUT_DIR, 'your_data_validated.csv')
+FINAL_SUMMARY_PATH = os.path.join(OUTPUT_DIR, 'final_summary_gdf.csv')
+FINAL_COMPLETE_PATH_CSV = os.path.join(OUTPUT_DIR, "final_complete_gdf.csv")
+FINAL_COMPLETE_PATH_GEOJSON = os.path.join(OUTPUT_DIR, "final_data.geojson")
+FINAL_COMPLETE_PATH_SHAPE = os.path.join(OUTPUT_DIR, "final_data.shp")
+CLUSTER_MAP_PATH = os.path.join(OUTPUT_DIR, 'cluster_map.png')
+
+RUN_SOLUTION_GENERATION_LLM = False 
 EXPLAIN = True # Controls if explanations are requested from the LLM
 
 GENERAL_CONTEXT_STR = '''
@@ -41,7 +53,29 @@ PDF_URI_LST = [
 def load_and_clean_data(file_path: str) -> pd.DataFrame:
     """Loads data from a CSV, cleans it by aggregating rows with the same h3_10 index."""
     print("--- 1. Loading and Cleaning Data ---")
-    df = pd.read_csv(file_path)
+    #df = pd.read_csv(file_path)
+
+    essential_cols = [
+        'h3_10', 'geometry', 'comments', 'flood_risk', 'tree_count_sum',
+        'fire_risk_202502', 'heat_risk', 'lst_day_202502', 'lst_night_202502',
+        'tree_connectivity', 'sealed_surfaces', 'fire_history', 
+        'climate_driven_impassable_roads', 'emergency_assemble_areas', 
+        'places_of_interest', 'densely_populated_at_risk_people', 'medical_care'
+    ]
+
+    # Define the data type for columns that might have mixed types
+    # 'comments' is often a good candidate to specify as a string
+    dtype_spec = {
+        'comments': str,
+        'climate_driven_impassable_roads': str,
+        'emergency_assemble_areas': str,
+        'places_of_interest': str,
+        'medical_care': str,
+        'densely_populated_at_risk_people': str
+    }
+
+    df = pd.read_csv(file_path, usecols=essential_cols, dtype=dtype_spec)
+
     agg_dict = {'comments': lambda x: ' '.join(x.dropna().astype(str))}
     for col in df.columns:
         if col not in ['comments', 'h3_10']:
@@ -65,7 +99,7 @@ def update_risk_value(df_main: pd.DataFrame, h3_index: str, field_to_update: str
 def validate_risk_with_llm(df_main: pd.DataFrame) -> pd.DataFrame:
     """Uses a Gemini model with function calling to validate risk scores based on user comments."""
     print("\n--- 2. Validating Risk with LLM ---")
-    vertexai.init(project=PROJECT_ID, location=LOCATION)
+    vertexai.init(project=PROJECT_ID, location=LOCATION) #TODO: wil be deprecated, see prompt filter comment for new version
     def update_risk_wrapper(h3_index: str, field_to_update: str, new_value: float) -> str:
         return update_risk_value(df_main, h3_index, field_to_update, new_value)
     model = GenerativeModel("gemini-2.5-pro")
@@ -94,6 +128,17 @@ def validate_risk_with_llm(df_main: pd.DataFrame) -> pd.DataFrame:
 def engineer_features_for_clustering(df: pd.DataFrame) -> (gpd.GeoDataFrame, np.ndarray):
     """Converts DataFrame to GeoDataFrame, scales coordinates and features for clustering."""
     print("\n--- 3. Engineering Features for Clustering ---")
+
+    print("\n--- Initial NaN Count Per Column ---")
+    nan_counts = df.isnull().sum()
+    # Filter to only show columns that actually have missing values
+    columns_with_nans = nan_counts[nan_counts > 0]
+
+    nans_columns = os.path.join(OUTPUT_DIR, 'nan_columns.txt')
+    with open(nans_columns, 'w') as f:
+        f.write(columns_with_nans.to_string())
+    print(f"NaN columns saved to '{nans_columns}'")
+
     df.reset_index(inplace=True)
     df.dropna(subset=['geometry'], inplace=True)
     gdf = gpd.GeoDataFrame(df, geometry=gpd.GeoSeries.from_wkt(df['geometry']), crs='EPSG:4326')
@@ -101,11 +146,14 @@ def engineer_features_for_clustering(df: pd.DataFrame) -> (gpd.GeoDataFrame, np.
     gdf['y'] = gdf.geometry.y
     coord_scaler = MinMaxScaler()
     gdf[['x_scaled', 'y_scaled']] = coord_scaler.fit_transform(gdf[['x', 'y']])
-    feature_cols = ['flood_risk', 'fire_risk_202502', 'heat_risk', 'tree_count_sum', 'tree_connectivity']
+    feature_cols = ['flood_risk', 'fire_risk_202502', 'heat_risk', 'tree_count_sum', 'tree_connectivity', 'sealed_surfaces' ]
+    print(f"Before feature cols dropna: {gdf.shape}")
+    gdf['tree_count_sum'] = gdf['tree_count_sum'].fillna(0)
     gdf.dropna(subset=feature_cols, inplace=True)
+    print(f"After feature cols dropna: {gdf.shape}")
     feature_scaler = StandardScaler()
     features_scaled = feature_scaler.fit_transform(gdf[feature_cols])
-    spatial_weight = 2.0
+    spatial_weight = 0
     weighted_coords = gdf[['x_scaled', 'y_scaled']].values * spatial_weight
     combined_data = np.hstack([weighted_coords, features_scaled])
     print(f"Feature engineering complete. Shape of data for clustering: {combined_data.shape}")
@@ -120,54 +168,185 @@ def perform_dbscan_clustering(gdf: gpd.GeoDataFrame, data_for_clustering: np.nda
     print("Clustering complete. Cluster counts:\n", gdf['cluster'].value_counts())
     return gdf
 
+def perform_hdbscan_clustering(gdf: gpd.GeoDataFrame, data_for_clustering: np.ndarray) -> gpd.GeoDataFrame:
+    """Runs HDBSCAN clustering and adds cluster labels to the GeoDataFrame."""
+    print("\n--- 4. Performing HDBSCAN Clustering ---")
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=1000, min_samples=150)
+    clusters = clusterer.fit_predict(data_for_clustering)
+    gdf['cluster'] = clusters
+    print("Clustering complete. Cluster counts:\n", gdf['cluster'].value_counts())
+    return gdf
+
+
+def explain_clusters_with_xai(gdf: gpd.GeoDataFrame, output_dir: str):
+    """
+    Trains surrogate models to explain the HDBSCAN clustering results
+    and saves the explanation visuals.
+    """
+    print("\n--- X. Generating XAI Explanations for Clusters ---")
+
+    # Define the features used in clustering
+    feature_cols = ['flood_risk', 'fire_risk_202502', 'heat_risk', 'tree_count_sum', 'tree_connectivity', 'sealed_surfaces' ]
+
+    train_data = gdf[gdf['cluster'] != -1].copy()
+    print("Data type of 'cluster' column:", train_data['cluster'].dtype)
+    print("Unique values in 'cluster' column:", train_data['cluster'].unique())
+    
+    if train_data.empty:
+        print("No clusters found to explain (all points are noise). Skipping XAI.")
+        return
+
+    X = train_data[feature_cols]
+    y = train_data['cluster']
+    y = y.astype(int)
+    # --- Explanation 1: Decision Tree Visualization ---
+    print("Generating Decision Tree explanation...")
+    surrogate_tree = DecisionTreeClassifier(max_depth=3, random_state=42)
+    surrogate_tree.fit(X, y)
+
+    # --- ADD THIS NEW DIAGNOSTIC CODE ---
+    print("\n--- Direct Tree Inspection ---")
+    # The 'tree_' attribute holds the underlying tree structure
+    # The 'value' attribute of the tree_ object is a 3D numpy array of shape [n_nodes, 1, n_classes]
+    tree_values = surrogate_tree.tree_.value
+    
+    print("Shape of the internal 'value' array:", tree_values.shape)
+    print("Data type (dtype) of the internal 'value' array:", tree_values.dtype)
+    
+    # Squeeze the array to remove the unnecessary dimension for easier viewing
+    # and print the values for the first few nodes.
+    print("Values for the first 5 nodes:\n", tree_values.squeeze()[:5])
+    print("--------------------------\n")
+    # --- END OF DIAGNOSTIC CODE ---
+
+    plt.figure(figsize=(60, 25))
+    plot_tree(surrogate_tree,
+              feature_names=X.columns.tolist(),
+              class_names=[str(c) for c in sorted(y.unique())],
+              filled=True,
+              rounded=True,
+              fontsize=10,
+             )
+    
+    tree_plot_path = os.path.join(output_dir, 'cluster_decision_tree_refined.png')
+    plt.title("Key Rules for Cluster Assignments (Decision Tree, Depth 3)", fontsize=24)
+    plt.savefig(tree_plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Refined Decision Tree plot saved to '{tree_plot_path}'")
+
+
+    # --- Explanation 2: SHAP Summary Plot (Using RandomForest) ---
+    print("\nGenerating SHAP explanation...")
+    
+    # Using RandomForestClassifier to avoid the persistent XGBoost CUDA bug
+    surrogate_rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+    surrogate_rf.fit(X, y)
+
+    # SHAP's TreeExplainer works perfectly with scikit-learn models
+    explainer = shap.TreeExplainer(surrogate_rf)
+    shap_values = explainer.shap_values(X)
+
+    fig, ax = plt.subplots(figsize=(15, 10))
+    shap.summary_plot(shap_values, X, plot_type="bar", class_names=[str(c) for c in sorted(y.unique())], show=False, plot_size=None)
+    
+    # --- LEGEND FIX STARTS HERE ---
+    # Move the legend to the right of the plot
+    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+    
+    # Adjust plot to make space for the legend
+    fig.tight_layout()
+    
+    shap_plot_path = os.path.join(output_dir, 'cluster_shap_summary_dot.png')
+    plt.title("Feature Impact on Cluster Assignment (SHAP Summary Plot)", fontsize=18)
+    plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Refined SHAP summary plot saved to '{shap_plot_path}'")
+
+def create_and_save_cluster_map(gdf: gpd.GeoDataFrame, output_path: str):
+    """
+    Generates and saves a map of the clustered points, coloring each point by its cluster ID.
+    """
+    print("\n--- Creating and Saving Cluster Map ---")
+    if 'cluster' not in gdf.columns:
+        print("Error: 'cluster' column not found in GeoDataFrame. Cannot create map.")
+        return
+
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+    
+    # Separate noise points (cluster == -1) to plot them differently
+    noise = gdf[gdf['cluster'] == -1]
+    clustered_points = gdf[gdf['cluster'] != -1]
+    
+    # Plot the actual clustered points with a color map
+    if not clustered_points.empty:
+        clustered_points.plot(
+            column='cluster',
+            ax=ax,
+            legend=True,
+            cmap='viridis', # A visually distinct color map
+            markersize=5,
+            categorical=True, # Treat cluster IDs as categories
+            legend_kwds={'title': "Cluster ID", 'bbox_to_anchor': (1.05, 1), 'loc': 'upper left'}
+        )
+    
+    # Plot noise points in grey with a different marker
+    if not noise.empty:
+        noise.plot(color='grey', marker='x', markersize=5, ax=ax, label='Noise / Outliers')
+
+    ax.set_title('Geospatial Distribution of Clusters', fontsize=16)
+    ax.set_axis_off()
+    
+    plt.tight_layout()
+    try:
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        print(f"Cluster map successfully saved to '{output_path}'")
+    except Exception as e:
+        print(f"Error saving map: {e}")
+    finally:
+        plt.close(fig)
+
 def summarize_clusters_and_outliers(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
     Separates outliers, summarizes clean clusters by centroid, and recombines them.
-    This version ensures 'h3_10' is a column throughout the process.
+    This version adds a descriptive summary for each cluster's features.
     """
     print("\n--- 5. Summarizing Clusters and Outliers ---")
-    
+
     special_outlier_cols = [
-        'climate_driven_impassable_roads',
-        'emergency_assemble_areas',
-        'comments',
-        'places_of_interest',
-        'densely_populated_at_risk_people',
-        'medical_care'
+        'climate_driven_impassable_roads', 'emergency_assemble_areas', 'comments',
+        'places_of_interest', 'densely_populated_at_risk_people', 'medical_care'
     ]
 
-    # --- START: FIX ---
-    # Create a temporary DataFrame for masking to avoid modifying the original gdf yet.
     gdf_for_masking = gdf[special_outlier_cols].copy()
-    
-    # Identify string columns to clean
     string_cols_to_clean = gdf_for_masking.select_dtypes(include=['object', 'string']).columns
-    
-    # Replace empty or whitespace-only strings with np.nan
     for col in string_cols_to_clean:
         gdf_for_masking[col] = gdf_for_masking[col].replace(r'^\s*$', np.nan, regex=True)
-
-    # Now create the mask from the cleaned data
     special_outlier_mask = gdf_for_masking.notna().any(axis=1)
-    # --- END: FIX ---
 
-    print(f"len gdf = {len(gdf)}")
-    print(f"len special_outlier_mask = {len(special_outlier_mask)}")
-
-    # PART 1: Isolate all outliers (original DBSCAN outliers OR special cases)
     outliers_gdf = gdf[(gdf['cluster'] == -1) | (special_outlier_mask)].copy()
-    print(f"len outliers_gdf = {len(outliers_gdf)}")
-    # Standardize all outliers to have a cluster ID of -1
     outliers_gdf['cluster'] = -1
     
-    # PART 2: Isolate the "clean" data to be clustered
     clusters_gdf = gdf[(gdf['cluster'] != -1) & (~special_outlier_mask)].copy()
-    print(f"len clusters_gdf = {len(clusters_gdf)}")
     
-    
-    # 2. SUMMARIZE THE CLEAN CLUSTERS
-    # ---------------------------------
-    if not clusters_gdf.empty: # Add a check to prevent errors if there are no clusters
+    if not clusters_gdf.empty:
+        print("\n--- Cluster Feature Summary Statistics ---")
+        feature_cols_for_summary = [
+            'flood_risk', 'fire_risk_202502', 'heat_risk',
+            'tree_count_sum', 'tree_connectivity'
+        ]
+        
+        # 1. Get descriptive statistics
+        cluster_summary_stats = clusters_gdf.groupby('cluster')[feature_cols_for_summary].describe()
+        #print(cluster_summary_stats)
+        #print("----------------------------------------\n")
+        
+        # 2. Save the descriptive statistics to a text file
+        summary_filename = os.path.join(OUTPUT_DIR, 'cluster_summary_stats.txt')
+        with open(summary_filename, 'w') as f:
+            f.write(cluster_summary_stats.to_string())
+        print(f"Cluster summary statistics saved to '{summary_filename}'")
+
+        # 3. Create the aggregated summary GeoDataFrame
         numerical_cols = clusters_gdf.select_dtypes(include=np.number).columns.tolist()
         agg_dict = {col: 'mean' for col in numerical_cols}
         if 'cluster' in agg_dict:
@@ -177,32 +356,36 @@ def summarize_clusters_and_outliers(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
             agg_dict['h3_10'] = 'first'
 
         def get_centroid(points):
+            if all(p is None or p.is_empty for p in points):
+                return None
             return gpd.GeoSeries(points).union_all().centroid
         
         agg_dict['geometry'] = get_centroid
         
-        cluster_summary_gdf = clusters_gdf.groupby('cluster').agg(agg_dict).reset_index()
-        print(f"len cluster_summary_gdf = {len(cluster_summary_gdf)}")
+        cluster_summary_df = clusters_gdf.groupby('cluster').agg(agg_dict).reset_index()
+
+        cluster_summary_gdf = gpd.GeoDataFrame(
+            cluster_summary_df, 
+            geometry='geometry', 
+            crs=gdf.crs  # Inherit CRS from the original GeoDataFrame
+        )
     else:
-        print("len cluster_summary_gdf = 0 (No clean clusters to summarize)")
-        cluster_summary_gdf = gpd.GeoDataFrame() # Create empty GeoDataFrame
+        print("No clean clusters were found to summarize.")
+        cluster_summary_gdf = gpd.GeoDataFrame()
     
-    # 3. COMBINE THE SUMMARIZED CLUSTERS AND THE INDIVIDUAL OUTLIERS
-    # ----------------------------------------------------------------
+    # PART 4: COMBINE SUMMARIZED CLUSTERS AND INDIVIDUAL OUTLIERS
     outliers_gdf.reset_index(drop=True, inplace=True)
+    
 
     final_summary_gdf = pd.concat([cluster_summary_gdf, outliers_gdf], ignore_index=True)
     final_summary_gdf = gpd.GeoDataFrame(final_summary_gdf, geometry='geometry')
-
     final_summary_gdf.loc[final_summary_gdf['cluster'] != -1, 'h3_10'] = None
 
     print("Final summary GeoDataFrame created successfully.")
-    print(f"Total rows: {len(final_summary_gdf)}")
-    print("\nFinal value counts for the 'cluster' column:")
-    print(final_summary_gdf['cluster'].value_counts().sort_index())
+    print(f"Total rows in summary: {len(final_summary_gdf)}")
     final_summary_gdf.to_csv(FINAL_SUMMARY_PATH, index=False)
     print(f"Cluster summarization complete. Saved to '{FINAL_SUMMARY_PATH}'")
-    print(f"Final summary GeoDataFrame shape: {final_summary_gdf.shape}")
+    
     return final_summary_gdf
 
 
@@ -267,6 +450,7 @@ async def generate_solution_actions_with_llm(summary_gdf: gpd.GeoDataFrame) -> d
                 print_output=False
             )
             tasks.append(task)
+            await asyncio.sleep(0.5) # Slight delay to avoid overwhelming the LLM
         except Exception as e:
             print(f"Error preparing task for row {row_id}: {e}", file=sys.stderr)
 
@@ -323,9 +507,11 @@ def map_solutions_to_dataframe(original_gdf: gpd.GeoDataFrame, llm_results: dict
 async def main_async():
     """Main async function to orchestrate the entire data processing pipeline."""
     df_cleaned = load_and_clean_data(DATABASE_PATH)
-    df_validated = validate_risk_with_llm(df_cleaned)
-    gdf, data_for_clustering = engineer_features_for_clustering(df_validated)
-    gdf_clustered = perform_dbscan_clustering(gdf, data_for_clustering)
+    #df_validated = validate_risk_with_llm(df_cleaned)
+    gdf, data_for_clustering = engineer_features_for_clustering(df_cleaned)
+    gdf_clustered = perform_hdbscan_clustering(gdf, data_for_clustering)
+    explain_clusters_with_xai(gdf_clustered, OUTPUT_DIR)
+    create_and_save_cluster_map(gdf_clustered, CLUSTER_MAP_PATH)
     gdf_summary = summarize_clusters_and_outliers(gdf_clustered)
     
     solution_results = await generate_solution_actions_with_llm(gdf_summary)
@@ -337,8 +523,12 @@ async def main_async():
     print(f"Final data saved to '{FINAL_COMPLETE_PATH_CSV}'")
     
     final_gdf.columns = final_gdf.columns.astype(str)
-    final_gdf.to_file(FINAL_COMPLETE_PATH_GEOJSON, driver="GeoJSON")
-    print(f"Final GeoDataFrame saved to '{FINAL_COMPLETE_PATH_GEOJSON}'")
+    ##final_gdf.to_file(FINAL_COMPLETE_PATH_GEOJSON, driver="GeoJSON")
+    #final_gdf.to_file(FINAL_COMPLETE_PATH_SHAPE)
+    #print(f"Final GeoDataFrame saved to '{FINAL_COMPLETE_PATH_SHAPE}'")
+    geopackage_path = os.path.join(OUTPUT_DIR, "final_data.gpkg")
+    final_gdf.to_file(geopackage_path, driver="GPKG")
+    print(f"Final GeoDataFrame saved to '{geopackage_path}'")
 
 if __name__ == "__main__":
     import time

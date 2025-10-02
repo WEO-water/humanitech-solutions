@@ -101,14 +101,14 @@ def get_data(data_dir=FELT_DATA_DIR, db_pth_dct=DB_PTH_DCT, index=INDEX):
 
     # Merge all DataFrames in db_gdfs on the 'INDEX' column
     merged_gdf = reduce(lambda left, right: pd.merge(left, right, on=INDEX, how='outer', suffixes=('', '_dup')),  [df for df in db_gdfs.values() if isinstance(df, pd.DataFrame) and INDEX in df.columns])
-
+    #merged_gdf.to_csv("merged_gdf.csv", index=False)
 
 
     #Filter the polygons that have a special feature, e.g., 'densely_populated_at_risk_people'
     # Get all keys except 'metrics'
     non_metrics_keys = [k for k in db_gdfs.keys() if k != 'metrics']
     # Only keep columns that exist in merged_gdf
-    cols_to_check = [k for k in non_metrics_keys if k in merged_gdf.columns]
+    cols_to_check = [k for k in non_metrics_keys if k in merged_gdf.columns] 
     # # Select rows where any of these columns is notna
     pois_df = merged_gdf[merged_gdf[cols_to_check].notna().any(axis=1)]
     print(pois_df.shape)
@@ -118,10 +118,14 @@ def get_data(data_dir=FELT_DATA_DIR, db_pth_dct=DB_PTH_DCT, index=INDEX):
 
     filtered_df = merged_gdf[merged_gdf['flood_risk'].notna() & merged_gdf['heat_risk'].notna() & merged_gdf['fire_risk_202502'].notna()]	
     print(f"Filtered DataFrame shape: {filtered_df.shape}")
+    filtered_df.to_csv("filtered_df.csv", index=False)
+    
+    os.makedirs("filtered_df", exist_ok=True) 
+    filtered_df.to_file(os.path.join("filtered_df", "filtered.shp")) 
     selected_rows = filtered_df[filtered_df['tree_count_sum']<15]
 
 
-
+#TODO: keep all polygons
     all_in_selected = pois_df[index].isin(selected_rows[index]).all()
 
     if not all_in_selected:
@@ -131,7 +135,7 @@ def get_data(data_dir=FELT_DATA_DIR, db_pth_dct=DB_PTH_DCT, index=INDEX):
 
     
     selected_rows.to_csv("df_export.csv", index=False)
-    gcs_path = upload_gcs(bucket_name="dl-test-439308-bucket", local_file_path="df_export.csv", gcs_prefix="weo-data/dashboard/")
+    #gcs_path = upload_gcs(bucket_name="dl-test-439308-bucket", local_file_path="df_export.csv", gcs_prefix="weo-data/dashboard/")
 
 
     for key, gdf in db_gdfs.items():

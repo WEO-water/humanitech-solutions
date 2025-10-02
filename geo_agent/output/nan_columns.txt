@@ -1,0 +1,9 @@
+tree_count_sum                       70402
+lst_day_202502                       18002
+lst_night_202502                      1622
+tree_connectivity                     1864
+medical_care                        171804
+climate_driven_impassable_roads     171798
+densely_populated_at_risk_people    171789
+emergency_assemble_areas            171796
+places_of_interest                  171798
